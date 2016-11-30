@@ -79,6 +79,9 @@ extern "C" {
   SANITIZER_INTERFACE_ATTRIBUTE
   void __asan_after_dynamic_init();
 
+  SANITIZER_INTERFACE_ATTRIBUTE
+  void __asan_poison_mid_shadow(uptr addr, uptr size,unsigned int value);
+
   // These two functions are used by instrumented code in the
   // use-after-scope mode. They mark memory for local variables as
   // unaddressable when they leave scope and addressable before the
@@ -156,6 +159,12 @@ extern "C" {
   SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE
   /* OPTIONAL */ const char* __asan_default_options();
 
+  SANITIZER_INTERFACE_ATTRIBUTE
+  extern unsigned int __asan_mallocIdCur;
+
+  SANITIZER_INTERFACE_ATTRIBUTE
+  extern unsigned int __asan_mallocId;
+
   // Global flag, copy of ASAN_OPTIONS=detect_stack_use_after_return
   SANITIZER_INTERFACE_ATTRIBUTE
   extern int __asan_option_detect_stack_use_after_return;
@@ -175,6 +184,11 @@ extern "C" {
   SANITIZER_INTERFACE_ATTRIBUTE void __asan_store16(uptr p);
   SANITIZER_INTERFACE_ATTRIBUTE void __asan_loadN(uptr p, uptr size);
   SANITIZER_INTERFACE_ATTRIBUTE void __asan_storeN(uptr p, uptr size);
+
+  SANITIZER_INTERFACE_ATTRIBUTE void __asan_store_printf(uptr p, u32 size);
+  SANITIZER_INTERFACE_ATTRIBUTE void __asan_load_printf(uptr p, u32 size);
+
+  SANITIZER_INTERFACE_ATTRIBUTE void __asan_reset_mscope();
 
   SANITIZER_INTERFACE_ATTRIBUTE void __asan_load1_noabort(uptr p);
   SANITIZER_INTERFACE_ATTRIBUTE void __asan_load2_noabort(uptr p);

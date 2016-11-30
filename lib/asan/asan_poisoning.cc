@@ -41,6 +41,16 @@ void PoisonShadow(uptr addr, uptr size, u8 value) {
   FastPoisonShadow(addr, size, value);
 }
 
+void PoisonMIdShadow(uptr addr, uptr size, unsigned int value) {
+  if (!CanPoisonMemory()) return;
+  // CHECK(AddrIsAlignedByGranularity(addr));
+  CHECK(AddrIsInMem(addr));
+  // CHECK(AddrIsAlignedByGranularity(addr + size));
+  CHECK(AddrIsInMem(addr + size - SHADOW_GRANULARITY));
+  CHECK(REAL(memset));
+  FastPoisonMIdShadow(addr, size, value);
+}
+
 void PoisonShadowPartialRightRedzone(uptr addr,
                                      uptr size,
                                      uptr redzone_size,

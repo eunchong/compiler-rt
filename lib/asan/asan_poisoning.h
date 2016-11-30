@@ -25,6 +25,7 @@ bool CanPoisonMemory();
 
 // Poisons the shadow memory for "size" bytes starting from "addr".
 void PoisonShadow(uptr addr, uptr size, u8 value);
+void PoisonMIdShadow(uptr addr, uptr size, unsigned int value);
 
 // Poisons the shadow memory for "redzone_size" bytes starting from
 // "addr + size".
@@ -65,6 +66,45 @@ ALWAYS_INLINE void FastPoisonShadow(uptr aligned_beg, uptr aligned_size,
         REAL(memset)((void *)page_end, 0, shadow_end - page_end);
       }
       ReserveShadowMemoryRange(page_beg, page_end - 1, nullptr);
+    }
+  }
+}
+
+ALWAYS_INLINE void FastPoisonMIdShadow(uptr aligned_beg, uptr aligned_size,
+                                    unsigned int value) {
+  DCHECK(CanPoisonMemory());
+
+  uptr shadow_beg = MEM_TO_SHADOW_MID_DWORD(aligned_beg);
+  uptr shadow_end = MEM_TO_SHADOW_MID_DWORD(
+      aligned_beg + aligned_size - SHADOW_GRANULARITY) + 1;
+  // FIXME: Page states are different on Windows, so using the same interface
+  // for mapping shadow and zeroing out pages doesn't "just work", so we should
+  // probably provide higher-level interface for these operations.
+  // For now, just memset on Windows.
+  if (value ||
+      SANITIZER_WINDOWS == 1 ||
+      shadow_end - shadow_beg < common_flags()->clear_shadow_mmap_threshold) {
+    // REAL(memset)((void*)shadow_beg, value, shadow_end - shadow_beg);
+
+    for(uptr i=shadow_beg;i<shadow_end;i=i+4)
+    {
+      *(unsigned int*)i = value;
+    }
+  } else {
+    uptr page_size = GetPageSizeCached();
+    uptr page_beg = RoundUpTo(shadow_beg, page_size);
+    uptr page_end = RoundDownTo(shadow_end, page_size);
+
+    if (page_beg >= page_end) {
+      REAL(memset)((void *)shadow_beg, 0, shadow_end - shadow_beg);
+    } else {
+      if (page_beg != shadow_beg) {
+        REAL(memset)((void *)shadow_beg, 0, page_beg - shadow_beg);
+      }
+      if (page_end != shadow_end) {
+        REAL(memset)((void *)page_end, 0, shadow_end - page_end);
+      }
+      ReserveMIdShadowMemoryRange(page_beg, page_end - 1, nullptr);
     }
   }
 }

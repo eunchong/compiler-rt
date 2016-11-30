@@ -15,6 +15,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <stdio.h>
 #include "asan_allocator.h"
 #include "asan_mapping.h"
 #include "asan_poisoning.h"
@@ -513,6 +514,24 @@ struct Allocator {
     uptr p = reinterpret_cast<uptr>(ptr);
     if (p == 0) return;
 
+    // GRMTrace
+    unsigned int *mallocIdPtr = (unsigned int*)MEM_TO_SHADOW_MID_DWORD((uptr)ptr);
+    if(*mallocIdPtr>=1) {
+      int midValue = 0;
+      uptr midStackValue = 0;
+      for(unsigned int i=0;i<stack->size;i++) {
+        if(stack->trace_buffer[i]) {
+          midValue = *(int*)MEM_TO_SHADOW_MID_DWORD((uptr)stack->trace_buffer[i]);
+          if(midValue == -1)
+            midStackValue = stack->trace_buffer[i];
+          break;
+        }
+      }
+      fprintf(stderr,"[f] %llx,%d,%d,%d,%llx,%d\n",ptr,delete_size,*mallocIdPtr,stack->size,midStackValue,midValue);
+      // stack->Print();
+    }
+    // GRMTrace
+
     uptr chunk_beg = p - kChunkHeaderSize;
     AsanChunk *m = reinterpret_cast<AsanChunk *>(chunk_beg);
 
@@ -731,7 +750,32 @@ void asan_sized_free(void *ptr, uptr size, BufferedStackTrace *stack,
 }
 
 void *asan_malloc(uptr size, BufferedStackTrace *stack) {
-  return instance.Allocate(size, 8, stack, FROM_MALLOC, true);
+  uptr addr;
+  addr = (uptr)instance.Allocate(size, 8, stack, FROM_MALLOC, true);
+  // GRMTrace
+  for(unsigned int i=0;i<stack->size;i++)
+  {
+    if((uptr)stack->trace_buffer && ((uptr)0x7f0000000000 & (uptr)stack->trace_buffer[i]) == (uptr)0x7f0000000000 )
+    {
+      int midValue = *(int*)MEM_TO_SHADOW_MID_DWORD((uptr)stack->trace_buffer[i]);
+      if(midValue == -1)
+      {
+        __asan_mallocId+=1;
+        PoisonMIdShadow(addr,size,__asan_mallocId);
+
+        fprintf(stderr,"[m] %llx,%d,%d,%d,%llx,%d\n",addr,size,__asan_mallocId,stack->size,stack->trace_buffer[i],midValue);
+        // stack->Print();
+        break;
+      }
+    }
+  }
+  // GRMTrace
+  // MEM_TO_SHADOW_MID_DWORD
+  // PoisonShadow(p, size, 0);
+  // Printf("[malloc] %llx,%d,%d,%d,%llx\n",addr,size,__asan_mallocId,stack->size,stack->trace_buffer);
+  // stack->Print();
+
+  return (void*)addr;
 }
 
 void *asan_calloc(uptr nmemb, uptr size, BufferedStackTrace *stack) {

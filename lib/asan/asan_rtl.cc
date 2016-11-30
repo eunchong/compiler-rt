@@ -31,9 +31,13 @@
 #include "lsan/lsan_common.h"
 #include "ubsan/ubsan_init.h"
 #include "ubsan/ubsan_platform.h"
+#include <stdio.h>
 
 int __asan_option_detect_stack_use_after_return;  // Global interface symbol.
 uptr *__asan_test_only_reported_buggy_pointer;  // Used only for testing asan.
+
+unsigned int __asan_mallocIdCur;
+unsigned int __asan_mallocId;
 
 namespace __asan {
 
@@ -89,6 +93,24 @@ void ReserveShadowMemoryRange(uptr beg, uptr end, const char *name) {
   CHECK_EQ((beg % GetMmapGranularity()), 0);
   CHECK_EQ(((end + 1) % GetMmapGranularity()), 0);
   uptr size = end - beg + 1;
+  DecreaseTotalMmap(size);  // Don't count the shadow against mmap_limit_mb.
+  void *res = MmapFixedNoReserve(beg, size, name);
+  if (res != (void*)beg) {
+    Report("ReserveShadowMemoryRange failed while trying to map 0x%zx bytes. "
+           "Perhaps you're using ulimit -v\n", size);
+    Abort();
+  }
+  if (common_flags()->no_huge_pages_for_shadow)
+    NoHugePagesInRegion(beg, size);
+  if (common_flags()->use_madv_dontdump)
+    DontDumpShadowMemory(beg, size);
+}
+
+void ReserveMIdShadowMemoryRange(uptr beg, uptr end, const char *name) {
+  CHECK_EQ((beg % GetMmapGranularity()), 0);
+  CHECK_EQ(((end + 1) % GetMmapGranularity()), 0);
+  uptr size = end - beg + 1;
+
   DecreaseTotalMmap(size);  // Don't count the shadow against mmap_limit_mb.
   void *res = MmapFixedNoReserve(beg, size, name);
   if (res != (void*)beg) {
@@ -354,6 +376,10 @@ static void ProtectGap(uptr addr, uptr size) {
 static void PrintAddressSpaceLayout() {
   Printf("|| `[%p, %p]` || HighMem    ||\n",
          (void*)kHighMemBeg, (void*)kHighMemEnd);
+  Printf("|| `[%p, %p]` || HighMIdShadow ||\n",
+         (void*)kHighMIdShadowBeg, (void*)kHighMIdShadowEnd);
+  Printf("|| `[%p, %p]` || LowMIdShadow  ||\n",
+         (void*)kLowMIdShadowBeg, (void*)kLowMIdShadowEnd);
   Printf("|| `[%p, %p]` || HighShadow ||\n",
          (void*)kHighShadowBeg, (void*)kHighShadowEnd);
   if (kMidMemBeg) {
@@ -401,11 +427,58 @@ static void PrintAddressSpaceLayout() {
           kHighShadowBeg > kMidMemEnd);
 }
 
+extern "C"
+NOINLINE INTERFACE_ATTRIBUTE
+void __asan_reset_mscope() {
+  // Printf("__asan_Printf %llx, %d\n",addr,size);
+  // unsigned int *mallocIdPtr = (unsigned int*)MEM_TO_SHADOW_MID_DWORD(addr);
+  // Printf("[__asan_reset_mscope] mallocIdCur : %d, mallocId : %d\n",__asan_mallocIdCur,__asan_mallocId);
+  __asan_mallocIdCur = __asan_mallocId;
+
+  // if(*mallocIdPtr) {
+  //   Printf("MEM_TO_SHADOW_MID_DWORD : (%llx -> %llx [%d])\n",addr,MEM_TO_SHADOW_MID_DWORD(addr),*mallocIdPtr);
+  // }
+  // Printf("MEM_TO_SHADOW_MID_DWORD : (%llx -> %llx [%d])\n",addr,MEM_TO_SHADOW_MID_DWORD(addr),*mallocIdPtr);
+}
+
+extern "C"
+NOINLINE INTERFACE_ATTRIBUTE
+void __asan_store_printf(uptr addr, u32 size) {
+  // Printf("__asan_Printf %llx, %d\n",addr,size);
+  unsigned int *mallocIdPtr = (unsigned int*)MEM_TO_SHADOW_MID_DWORD(addr);
+  if(*mallocIdPtr > 0 && *mallocIdPtr < __asan_mallocIdCur) {
+  // if(*mallocIdPtr > 0) {
+    Printf("[u] %llx,0,%d,store\n",addr,*mallocIdPtr);
+  }
+  // Printf("MEM_TO_SHADOW_MID_DWORD : (%llx -> %llx [%d])\n",addr,MEM_TO_SHADOW_MID_DWORD(addr),*mallocIdPtr);
+}
+
+extern "C"
+NOINLINE INTERFACE_ATTRIBUTE
+void __asan_load_printf(uptr addr, u32 size) {
+  // Printf("__asan_Printf %llx, %d\n",addr,size);
+  unsigned int *mallocIdPtr = (unsigned int*)MEM_TO_SHADOW_MID_DWORD(addr);
+  if(*mallocIdPtr > 0 && *mallocIdPtr < __asan_mallocIdCur) {
+  // if(*mallocIdPtr > 0) {
+    Printf("[u] %llx,0,%d,load\n",addr,*mallocIdPtr);
+  }
+  // Printf("MEM_TO_SHADOW_MID_DWORD : (%llx -> %llx [%d])\n",addr,MEM_TO_SHADOW_MID_DWORD(addr),*mallocIdPtr);
+}
+
+extern "C"
+NOINLINE INTERFACE_ATTRIBUTE
+void __asan_poison_mid_shadow(uptr addr, uptr size,unsigned int value) {
+  PoisonMIdShadow(addr,size,value);
+}
+
 static void AsanInitInternal() {
   if (LIKELY(asan_inited)) return;
   SanitizerToolName = "AddressSanitizer";
   CHECK(!asan_init_is_running && "ASan init calls itself!");
   asan_init_is_running = true;
+
+  __asan_mallocId = 0;
+  __asan_mallocIdCur = 0;
 
   CacheBinaryName();
 
@@ -454,10 +527,14 @@ static void AsanInitInternal() {
   ReplaceSystemMalloc();
 
   uptr shadow_start = kLowShadowBeg;
+  uptr shadow_mid_start = kLowMIdShadowBeg;
   if (kLowShadowBeg)
+  {
     shadow_start -= GetMmapGranularity();
+    shadow_mid_start -= GetMmapGranularity();
+  }
   bool full_shadow_is_available =
-      MemoryRangeIsAvailable(shadow_start, kHighShadowEnd);
+      MemoryRangeIsAvailable(shadow_start, kHighMIdShadowEnd); // MemoryRangeIsAvailable(shadow_start, kHighShadowEnd);
 
 #if SANITIZER_LINUX && defined(__x86_64__) && defined(_LP64) &&                \
     !ASAN_FIXED_MAPPING
@@ -480,9 +557,14 @@ static void AsanInitInternal() {
   if (full_shadow_is_available) {
     // mmap the low shadow plus at least one page at the left.
     if (kLowShadowBeg)
+    {
       ReserveShadowMemoryRange(shadow_start, kLowShadowEnd, "low shadow");
+      ReserveMIdShadowMemoryRange(kLowMIdShadowBeg, kLowMIdShadowEnd, "low mid shadow");
+    }
+
     // mmap the high shadow.
     ReserveShadowMemoryRange(kHighShadowBeg, kHighShadowEnd, "high shadow");
+    ReserveMIdShadowMemoryRange(kHighMIdShadowBeg, kHighMIdShadowEnd, "high mid shadow");
     // protect the gap.
     ProtectGap(kShadowGapBeg, kShadowGapEnd - kShadowGapBeg + 1);
     CHECK_EQ(kShadowGapEnd, kHighShadowBeg - 1);

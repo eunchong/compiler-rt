@@ -142,7 +142,9 @@ static const u64 kFreeBSD_ShadowOffset64 = 1ULL << 46;  // 0x400000000000
 static const u64 kWindowsShadowOffset32 = 3ULL << 28;  // 0x30000000
 static const u64 kWindowsShadowOffset64 = 1ULL << 45;  // 32TB
 
-#define SHADOW_SCALE kDefaultShadowScale
+// #define SHADOW_SCALE kDefaultShadowScale
+#define SHADOW_SCALE 3
+#define SHADOW_MID_SCALE 3
 
 
 #if SANITIZER_WORDSIZE == 32
@@ -199,7 +201,22 @@ static const u64 kWindowsShadowOffset64 = 1ULL << 45;  // 32TB
 #define kLowShadowBeg   SHADOW_OFFSET
 #define kLowShadowEnd   MEM_TO_SHADOW(kLowMemEnd)
 
-#define kHighMemBeg     (MEM_TO_SHADOW(kHighMemEnd) + 1)
+// #define kHighMemBeg     (MEM_TO_SHADOW(kHighMemEnd) + 1)
+#define SHADOW_MID_OFFSET (MEM_TO_SHADOW(kHighMemEnd) + 1)
+
+
+#define MEM_TO_SHADOW_MID(mem) (((mem) >> SHADOW_MID_SCALE) + (SHADOW_MID_OFFSET))
+#define SHADOW_MID_TO_MEM(shadow) (((shadow) - SHADOW_MID_OFFSET) << SHADOW_MID_SCALE)
+
+#define MEM_TO_SHADOW_MID_DWORD(mem) (((((mem) >> SHADOW_MID_SCALE) + (SHADOW_MID_OFFSET)) >> 2) << 2)
+
+#define kLowMIdShadowBeg   SHADOW_MID_OFFSET
+#define kLowMIdShadowEnd   MEM_TO_SHADOW_MID(kLowMemEnd)
+
+#define kHighMemBeg     (MEM_TO_SHADOW_MID(kHighMemEnd) + 1)
+// #define kHighMemBeg     (MEM_TO_SHADOW(kHighMemEnd) + 1)
+#define kHighMIdShadowBeg  MEM_TO_SHADOW_MID(kHighMemBeg)
+#define kHighMIdShadowEnd  MEM_TO_SHADOW_MID(kHighMemEnd)
 
 #define kHighShadowBeg  MEM_TO_SHADOW(kHighMemBeg)
 #define kHighShadowEnd  MEM_TO_SHADOW(kHighMemEnd)
@@ -221,6 +238,10 @@ static const u64 kWindowsShadowOffset64 = 1ULL << 45;  // 32TB
 
 #define kShadowGap3Beg (kMidMemBeg ? kMidMemEnd + 1 : 0)
 #define kShadowGap3End (kMidMemBeg ? kHighShadowBeg - 1 : 0)
+
+#define GAP_OFFSET kShadowGapBeg
+#define MEM_TO_GAP(mem) (((mem) >> (SHADOW_SCALE*2)) + (GAP_OFFSET))
+#define GAP_TO_MEM(shadow) (((shadow) - GAP_OFFSET) << (SHADOW_SCALE*2))
 
 #define DO_ASAN_MAPPING_PROFILE 0  // Set to 1 to profile the functions below.
 
